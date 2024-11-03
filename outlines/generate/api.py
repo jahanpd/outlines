@@ -1,7 +1,7 @@
 import datetime
 from copy import copy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterator, List, Optional, Union, Tuple
 
 from outlines.generate.generator import sequence_generator
 from outlines.samplers import BeamSearchSampler, GreedySampler, MultinomialSampler
@@ -133,7 +133,11 @@ class SequenceGenerator:
         max_tokens: Optional[int] = None,
         stop_at: Optional[Union[str, List[str]]] = None,
         rng: Optional["torch.Generator"] = None,
-    ) -> Union[FormattedOutput, List[FormattedOutput], List[List[FormattedOutput]]]:
+    ) -> Union[
+            FormattedOutput, 
+            List[FormattedOutput], 
+            List[List[FormattedOutput]], 
+            Tuple[FormattedOutput, List[float]]]:
         """Generate the full text sequence.
 
         Since `SequenceGenerator.stream` calls the tokenizer at every step this
@@ -493,6 +497,7 @@ class SequenceGeneratorAdapter:
         max_tokens: Optional[int] = None,
         stop_at: Optional[Union[str, List[str]]] = None,
         seed: Optional[int] = None,
+        log_probs: Optional[bool] = None,
         **model_specific_params,
     ):
         """Generate text from a prompt of list of prompts."""
@@ -501,15 +506,27 @@ class SequenceGeneratorAdapter:
             max_tokens, stop_at, seed
         )
 
-        completions = self.model.generate(
-            prompts,
-            generation_params,
-            copy(self.logits_processor),
-            self.sampling_params,
-            **model_specific_params,
-        )
+        if log_probs:
+            completions, logprobs = self.model.generate(
+                prompts,
+                generation_params,
+                copy(self.logits_processor),
+                self.sampling_params,
+                log_probs,
+                **model_specific_params,
+            )
+            return self._format(completions), logprobs
 
-        return self._format(completions)
+        else:
+            completions = self.model.generate(
+                prompts,
+                generation_params,
+                copy(self.logits_processor),
+                self.sampling_params,
+                log_probs,
+                **model_specific_params,
+            )
+            return self._format(completions)
 
     def stream(
         self,

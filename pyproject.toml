@@ -42,6 +42,9 @@ dependencies = [
    "airportsdata",
    "torch",
    "outlines_core==0.1.14",
+	 "transformers",
+	 "accelerate",
+	 "bitsandbytes"
 ]
 dynamic = ["version"]
 
@@ -162,3 +165,6 @@ show_missing = true
 [tool.diff_cover]
 compare_branch = "origin/main"
 diff_range_notation = ".."
+
+[tool.basedpyright]
+typeCheckingMode = "basic"

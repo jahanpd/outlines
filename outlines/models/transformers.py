@@ -7,6 +7,8 @@ from datasets.fingerprint import Hasher
 from outlines.generate.api import GenerationParameters, SamplingParameters
 from outlines.models.tokenizer import Tokenizer
 
+import torch
+
 if TYPE_CHECKING:
     import torch
     from transformers import PreTrainedModel, PreTrainedTokenizer
@@ -200,7 +202,8 @@ class Transformers:
         generation_parameters: GenerationParameters,
         logits_processor: Optional["OutlinesLogitsProcessor"],
         sampling_parameters: SamplingParameters,
-    ) -> Union[str, List[str], List[List[str]]]:
+        log_probs: Optional[bool],
+    ) -> Union[str, List[str], List[List[str]], Tuple[str, List[float]]]:
         """Generate text using `transformers`.
 
         Arguments
@@ -243,14 +246,26 @@ class Transformers:
             generation_parameters,
             logits_processor,
             sampling_parameters,
+            log_probs
         )
-        generated_ids = self._generate_output_seq(prompts, inputs, **generation_kwargs)
+        if log_probs:
+            generated_ids, logprobs = self._generate_output_seq(
+                    prompts, 
+                    inputs, 
+                    log_probs=log_probs, 
+                    **generation_kwargs
+            )
+        else:
+            generated_ids = self._generate_output_seq(prompts, inputs, log_probs=log_probs, **generation_kwargs)
 
         # if single str input and single sample per input, convert to a 1D output
         if isinstance(prompts, str):
             generated_ids = generated_ids.squeeze(0)
 
-        return self._decode_generation(generated_ids)
+        if log_probs:
+            return self._decode_generation(generated_ids), logprobs
+        else:
+            return self._decode_generation(generated_ids)
 
     def stream(
         self,
@@ -285,8 +300,9 @@ class Transformers:
             generation_parameters,
             logits_processor,
             sampling_parameters,
+            log_probs=False
         )
-        generated_ids = self._generate_output_seq(prompts, inputs, **generation_kwargs)
+        generated_ids = self._generate_output_seq(prompts, inputs, log_probs=False, **generation_kwargs)
 
         # if single str input and single sample per input, convert to a 1D output
         if isinstance(prompts, str):
@@ -302,6 +318,7 @@ class Transformers:
         generation_parameters: GenerationParameters,
         logits_processor: Optional["OutlinesLogitsProcessor"],
         sampling_parameters: SamplingParameters,
+        log_probs: Optional[bool]
     ) -> dict:
         """
         Conert outlines generation parameters into model.generate kwargs
@@ -335,6 +352,8 @@ class Transformers:
             num_beams=(num_samples if sampler == "beam_search" else 1),
             eos_token_id=self.tokenizer.eos_token_id,
             pad_token_id=self.tokenizer.pad_token_id,
+            output_logits=log_probs,
+            return_dict_in_generate=log_probs
         )
 
         return dict(
@@ -344,12 +363,17 @@ class Transformers:
         )
 
     def _generate_output_seq(
-        self, prompts, inputs, generation_config, **generation_kwargs
+        self, prompts, inputs, log_probs, generation_config, **generation_kwargs
     ):
         input_ids = inputs["input_ids"]
-        output_ids = self.model.generate(
+        output = self.model.generate(
             **inputs, generation_config=generation_config, **generation_kwargs
         )
+        if log_probs:
+            output_ids = output[0]
+            logprobs = [float(torch.log(torch.nn.functional.softmax(l, dim=1)[:, l.argmax()])) for l in output[1]]
+        else:
+            output_ids = output
 
         # encoder-decoder returns output_ids only, decoder-only returns full seq ids
         if self.model.config.is_encoder_decoder:
@@ -365,7 +389,10 @@ class Transformers:
             num_return_sequences = generation_config.num_return_sequences or 1
             generated_ids = generated_ids.view(batch_size, num_return_sequences, -1)
 
-        return generated_ids
+        if log_probs:
+            return generated_ids, logprobs
+        else:
+            return generated_ids
 
     def _decode_generation(self, generated_ids: "torch.Tensor"):
         if len(generated_ids.shape) == 1:
